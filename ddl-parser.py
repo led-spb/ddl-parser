@@ -1,13 +1,14 @@
 #!/usr/bin/python
 import re
 from jinja2 import Environment
-import sys
+import datetime
 import os.path
 import fnmatch
+import argparse
 
 template = """<?php
 /*
-    Auto generated from {{source}}
+    Auto generated {{ now() | datetimeformat }} from {{source}}
 */
 
 class {{ filename }} extends Migration
@@ -75,12 +76,31 @@ def parse_tables(filename):
 
 
 def main():
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--file_format',
+        default='m_00000_%06d_%s',
+        help='default m_00000_%%06d_%%s'
+    )
+    parser.add_argument('source_path')
+    parser.add_argument('target_path')
+    args = parser.parse_args()
+    print args
+
     matches = []
-    for root, dirnames, filenames in os.walk(sys.argv[1]):
+    for root, dirnames, filenames in os.walk(args.source_path):
         for filename in fnmatch.filter(filenames, '*.sql'):
             matches.append(os.path.join(root, filename))
 
-    tmp = Environment().from_string(template)
+    def datetimeformat(value, format='%d-%m-%Y %H:%M'):
+        return value.strftime(format)
+    env = Environment()
+    env.filters['datetimeformat'] = datetimeformat
+
+    tmp = env.from_string(template)
+    tmp.globals['now'] = datetime.datetime.utcnow
+
     count_files = 0
 
     for filename in matches:
@@ -89,14 +109,16 @@ def main():
         if len(tables) > 0:
             base = os.path.splitext(os.path.basename(filename))
             count_files = count_files + 1
-            migration_name = 'm_000000_%06d_%s' % (count_files, base[0])
+            migration_name = args.file_format % (count_files, base[0])
 
             converted = tmp.render(
                 tables=tables,
                 filename=migration_name,
                 source=filename
             )
-            f = open(migration_name+'.php', 'w')
+            f = open(
+                os.path.join(args.target_path, migration_name+'.php'), 'w'
+            )
             f.write(converted)
             f.close()
     pass
