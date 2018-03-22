@@ -6,73 +6,126 @@ import os.path
 import fnmatch
 import argparse
 
-template = """<?php
-/*
-    Auto generated {{ now() | datetimeformat }} from {{source}}
-*/
 
-class {{ filename }} extends Migration
-{
-    public function up()
-    {
-{% for table in tables %}
-       $this->createTableIfNotExists('{{ table.name }}',array({% for column in table.columns %}
-            '{{column[0]}}' => '{{column[1]}}'{% if not loop.last %},{% endif %}{{""}}{% endfor %}
-       ));
+def extract_tokens_by_commas(
+        text, offset, on_token, separator=',',
+        brakets_open='({[',
+        brakets_close=')}]',
+        ):
+    token = ""
+    braket_cnt = 1
+    while offset < len(text):
+        if text[offset] in brakets_open:
+            braket_cnt = braket_cnt + 1
+        if text[offset] in brakets_close:
+            braket_cnt = braket_cnt - 1
 
-{% endfor %}
+        if (braket_cnt == 1 and text[offset] in separator) or braket_cnt == 0:
+            on_token(token)
+            token = ""
+        else:
+            token = token + text[offset]
+
+        if braket_cnt == 0:
+            break
+        offset = offset + 1
+    return offset
+
+
+def parse_constraint_def(token):
+    m = re.search(
+        '^\s*(?:constraint\s+(\S+)\s*)?'
+        '((?:primary\s+key)|(?:unique))\s+'
+        '(?:(clustered|nonclustered)\s+)?\((.*?)\)', token, re.I+re.M+re.S)
+    if m is None:
+        return None
+    return {
+        'name': m.group(1),
+        'type': m.group(2),
+        'storage': m.group(3),
+        'columns': [x.strip() for x in m.group(4).strip().split(',')]
     }
-}
-"""
+    pass
+
+
+def parse_column_def(token):
+    m = re.search('^\s*(\S+)\s*(\S+(?:\s*\([^)]+?\))?)\s*(.*)$', token)
+    if m is not None:
+        return {
+            'name': m.group(1),
+            'type': m.group(2),
+            'extra': m.group(3)
+        }
+    else:
+        return None
 
 
 def parse_tables(filename):
     data = open(filename, 'rU').read()
 
+    # Remove commentaries
     data = re.sub('^(.*?)(--.*)$', '\\1', data, 0, re.M)
     data = re.sub('\/\*.*?\*\/', '', data, 0, re.M+re.S)
     data = re.sub('\t', ' ', data, 0, re.M)
 
-    tables = []
+    tables = {}
+    table = {}
+    index = {}
 
-    for m in re.finditer('create\s+table\s+(\S+)\s*\(', data, re.M+re.S):
+    def gather_table_columns(token):
+        token = token.strip()
+        if token == '':
+            return
+        constr_def = parse_constraint_def(token)
+        if constr_def is not None:
+            table['constraints'].append(constr_def)
+        else:
+            coldef = parse_column_def(token)
+            if coldef is not None:
+                table['columns'].append(coldef)
+        pass
+
+    def gather_index_columns(token):
+        token = token.strip()
+        if token != '':
+            index['columns'].append(token)
+
+    # Parse table structure
+    for m in re.finditer(
+            '\\bcreate\s+table\s+([^\s()]+)\s*\(', data, re.M+re.S+re.I):
         table_name = m.group(1)
-
         # Skip temporary tables
         if table_name.startswith('#'):
             continue
 
+        table = {
+            "name": table_name,
+            "columns": [],
+            "indexes": [],
+            "constraints": []
+        }
         idx = m.end()
-        brakets = 1
+        extract_tokens_by_commas(
+            data, idx,  on_token=gather_table_columns
+        )
+        tables[table_name] = table
 
-        table_body = []
-        column = ""
+    # Parse indexes
+    for m in re.finditer(
+                 '\\bcreate\s+?(?:(clustered|nonclustered|unique)'
+                 '\s+)?index\s+(\S+)\s+on\s*(\S+)\s*\(',
+                 data, re.M+re.S+re.I):
 
-        while idx < len(data):
-            if data[idx] == '(':
-                brakets = brakets + 1
-            if data[idx] == ')':
-                brakets = brakets - 1
-
-            if (brakets == 1 and data[idx] == ',') or brakets == 0:
-                column = column.strip()
-                if column != "":
-                    column = re.sub('\s{2,}', ' ', column)
-                    if column.startswith('primary key '):
-                        table_body.append([column, ''])
-                    else:
-                        table_body.append(column.split(' ', 1))
-                    column = ""
-
-                if brakets == 0:
-                    break
-            else:
-                column = column + data[idx]
-            idx = idx + 1
-
-        # if not table_name.startswith('#'):
-        tables.append({'name': table_name, 'columns': table_body})
-    return tables
+        table_name = m.group(3)
+        index = {
+            'name': m.group(2), 'type': m.group(1),
+            'columns': []
+        }
+        extract_tokens_by_commas(data, m.end(), gather_index_columns)
+        tables[table_name]['indexes'].append(index)
+        pass
+    # Parse constraints
+    return tables.values()
 
 
 def main():
@@ -83,10 +136,13 @@ def main():
         default='m_00000_%06d_%s',
         help='default m_00000_%%06d_%%s'
     )
+    parser.add_argument(
+        '--template',
+        default='{{tables|tojson(indent=2)}}'
+    )
     parser.add_argument('source_path')
     parser.add_argument('target_path')
     args = parser.parse_args()
-    print args
 
     matches = []
     for root, dirnames, filenames in os.walk(args.source_path):
@@ -95,16 +151,20 @@ def main():
 
     def datetimeformat(value, format='%d-%m-%Y %H:%M'):
         return value.strftime(format)
-    env = Environment()
+    env = Environment(trim_blocks=False)
     env.filters['datetimeformat'] = datetimeformat
 
+    if args.template.startswith('@'):
+        template = open(args.template[1:], 'rU').read()
+    else:
+        template = args.template
     tmp = env.from_string(template)
-    tmp.globals['now'] = datetime.datetime.utcnow
+    tmp.globals['now'] = datetime.datetime.now
 
     count_files = 0
 
     for filename in matches:
-        print filename
+        print 'Processing %s...' % filename
         tables = parse_tables(filename)
         if len(tables) > 0:
             base = os.path.splitext(os.path.basename(filename))
