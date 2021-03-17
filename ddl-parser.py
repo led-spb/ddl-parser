@@ -128,13 +128,16 @@ def parse_tables(filename):
     return tables.values()
 
 
+def quote(string):
+    return string.replace("'", "\\'")
+
 def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '--file_format',
-        default='m_00000_%06d_%s',
-        help='default m_00000_%%06d_%%s'
+        default='m00000_%06d_%s',
+        help='default m00000_%%06d_%%s'
     )
     parser.add_argument(
         '--template',
@@ -153,6 +156,7 @@ def main():
         return value.strftime(format)
     env = Environment(trim_blocks=False)
     env.filters['datetimeformat'] = datetimeformat
+    env.filters['quote'] = quote
 
     if args.template.startswith('@'):
         template = open(args.template[1:], 'rU').read()
