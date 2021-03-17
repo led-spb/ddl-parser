@@ -63,7 +63,7 @@ def parse_column_def(token):
 def parse_tables(filename):
     data = open(filename, 'rU').read()
 
-    # Remove commentaries
+    # Remove comments
     data = re.sub('^(.*?)(--.*)$', '\\1', data, 0, re.M)
     data = re.sub('\/\*.*?\*\/', '', data, 0, re.M+re.S)
     data = re.sub('\t', ' ', data, 0, re.M)
@@ -124,17 +124,20 @@ def parse_tables(filename):
         extract_tokens_by_commas(data, m.end(), gather_index_columns)
         tables[table_name]['indexes'].append(index)
         pass
-    # Parse constraints
+    # TODO: : Parse constraints
     return tables.values()
 
+
+def quote(string):
+    return string.replace("'", "\\'")
 
 def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '--file_format',
-        default='m_00000_%06d_%s',
-        help='default m_00000_%%06d_%%s'
+        default='m00000_%06d_%s',
+        help='default m00000_%%06d_%%s'
     )
     parser.add_argument(
         '--template',
@@ -153,6 +156,7 @@ def main():
         return value.strftime(format)
     env = Environment(trim_blocks=False)
     env.filters['datetimeformat'] = datetimeformat
+    env.filters['quote'] = quote
 
     if args.template.startswith('@'):
         template = open(args.template[1:], 'rU').read()
