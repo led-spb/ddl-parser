@@ -63,7 +63,7 @@ def parse_column_def(token):
 def parse_tables(filename):
     data = open(filename, 'rU').read()
 
-    # Remove commentaries
+    # Remove comments
     data = re.sub('^(.*?)(--.*)$', '\\1', data, 0, re.M)
     data = re.sub('\/\*.*?\*\/', '', data, 0, re.M+re.S)
     data = re.sub('\t', ' ', data, 0, re.M)
@@ -124,7 +124,7 @@ def parse_tables(filename):
         extract_tokens_by_commas(data, m.end(), gather_index_columns)
         tables[table_name]['indexes'].append(index)
         pass
-    # Parse constraints
+    # TODO: : Parse constraints
     return tables.values()
 
 
